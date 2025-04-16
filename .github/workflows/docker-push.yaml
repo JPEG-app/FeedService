@@ -27,6 +27,6 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/user-service:${{ github.sha }}
-          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/user-service:cache
-          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/user-service:cache,mode=max
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/feed-service:${{ github.sha }}
+          cache-from: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/feed-service:cache
+          cache-to: type=registry,ref=${{ secrets.DOCKERHUB_USERNAME }}/feed-service:cache,mode=max
