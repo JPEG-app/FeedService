@@ -1,0 +1,15 @@
+services:
+  feed-service:
+    build: .
+    ports:
+      - "3003:3003"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    networks:
+      - jpeg
+
+networks:
+  jpeg:
+    external: true
