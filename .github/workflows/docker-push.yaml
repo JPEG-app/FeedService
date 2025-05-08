@@ -1,4 +1,4 @@
-name: Docker Push
+name: Docker Push with SonarCloud
 
 on:
   push:
@@ -6,12 +6,36 @@ on:
       - main
 
 jobs:
-  build-and-push:
+  build-analyze-and-push:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK (if your project is Java-based, adjust as needed)
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=YOUR_SONARCLOUD_ORGANIZATION_KEY
+            -Dsonar.projectKey=YOUR_SONARCLOUD_PROJECT_KEY
+            # -Dsonar.sources=.  # Adjust if your source code isn't in the root
+            # -Dsonar.tests=.    # Adjust if your tests aren't in the root
+            # -Dsonar.exclusions=**/*.spec.js,**/__tests__/** # Example exclusions
+            # -Dsonar.coverage.exclusions=... # Example coverage exclusions
+            # Add other analysis parameters as needed, for example, to specify coverage reports:
+            # -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
