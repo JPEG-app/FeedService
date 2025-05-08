@@ -1,4 +1,4 @@
-name: Docker Push with SonarCloud
+name: Docker Push
 
 on:
   push:
@@ -6,45 +6,12 @@ on:
       - main
 
 jobs:
-  sonarcloud-analysis:
-    name: Build and analyze
-    runs-on: windows-latest
+  build-and-push:
+    runs-on: ubuntu-latest
+
     steps:
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: 17
-          distribution: "zulu"
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Cache SonarQube Cloud packages
-        uses: actions/cache@v4
-        with:
-          path: ~\sonar\cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
-      - name: Cache SonarQube Cloud scanner
-        id: cache-sonar-scanner
-        uses: actions/cache@v4
-        with:
-          path: .\.sonar\scanner
-          key: ${{ runner.os }}-sonar-scanner
-          restore-keys: ${{ runner.os }}-sonar-scanner
-      - name: Install SonarQube Cloud scanner
-        if: steps.cache-sonar-scanner.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          New-Item -Path .\.sonar\scanner -ItemType Directory
-          dotnet tool update dotnet-sonarscanner --tool-path .\.sonar\scanner
-      - name: Build and analyze
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        shell: powershell
-        run: |
-          .\.sonar\scanner\dotnet-sonarscanner begin /k:"S6-AdvancedSoftware-Individual_accounts-service" /o:"cockatoo" /d:sonar.token="${{ secrets.SONAR_TOKEN }}" /d:sonar.host.url="https://sonarcloud.io"
-          dotnet build ./api/AccountService.sln
-          .\.sonar\scanner\dotnet-sonarscanner end /d:sonar.token="${{ secrets.SONAR_TOKEN }}"
+      - name: Checkout code
+        uses: actions/checkout@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
