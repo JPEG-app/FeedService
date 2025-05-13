@@ -1,19 +1,27 @@
+// feed-service/src/routes/feed.routes.ts
 import express from 'express';
 import { FeedController } from '../controllers/feed.controller';
 import { FeedService } from '../services/feed.service';
-import { FeedRepository } from '../repositories/feed.repository';
-// import { authMiddleware } from '../middlewares/auth.middleware'; // Assuming you have auth middleware
 
 const router = express.Router();
 
-export const setupFeedRoutes = (postServiceUrl: string) => {
-  const feedRepository = new FeedRepository(postServiceUrl);
-  const feedService = new FeedService(feedRepository);
-  const feedController = new FeedController(feedService);
+// The FeedService instance will be passed from app.ts/index.ts
+export const setupFeedRoutes = (feedServiceInstance: FeedService) => {
+  const feedController = new FeedController(feedServiceInstance);
 
-  router.get('/feed', feedController.getFeed.bind(feedController)); // Protect with auth middleware
+  router.get('/feed', feedController.getFeed.bind(feedController));
+
+  // Optional endpoint for testing cache clearing
+  router.post('/feed/admin/clear-cache', (req, res) => {
+    if (feedServiceInstance && typeof feedServiceInstance.clearAllCaches === 'function') {
+      feedServiceInstance.clearAllCaches();
+      res.status(200).send({ message: 'Feed caches cleared successfully.' });
+    } else {
+      res.status(500).send({ message: 'Feed service or clear cache method not available.'});
+    }
+  });
 
   return router;
 };
 
-export default router;
+// Remove 'export default router;' if you are only using the setupFeedRoutes function

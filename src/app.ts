@@ -1,15 +1,23 @@
+// feed-service/src/app.ts
 import express, { Application } from 'express';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import { setupFeedRoutes } from './routes/feed.routes';
+import { FeedService } from './services/feed.service';
+import { initializeFeedServiceForConsumer } from './kafka/consumer';
 
 export class App {
   public app: Application;
-  private postServiceUrl: string;
+  public feedService: FeedService;
 
-  constructor(postServiceUrl: string) {
+  constructor() {
     this.app = express();
-    this.postServiceUrl = postServiceUrl;
+    this.feedService = new FeedService(); // Create FeedService instance
+
+    // Pass the FeedService instance to the Kafka consumer module
+    // This allows the consumer to call methods on the FeedService instance.
+    initializeFeedServiceForConsumer(this.feedService);
+
     this.config();
     this.routes();
   }
@@ -17,9 +25,8 @@ export class App {
   private config(): void {
     const allowedOrigins = [
       'http://localhost:5173',
-      'http://127.0.0.1:5173'
+      'http://127.0.0.1:5173',
     ];
-
     const corsOptions: cors.CorsOptions = {
       origin: function (origin, callback) {
         if (!origin || allowedOrigins.includes(origin)) {
@@ -36,6 +43,7 @@ export class App {
   }
 
   private routes(): void {
-    this.app.use('/', setupFeedRoutes(this.postServiceUrl));
+    // Pass the feedService instance to setupFeedRoutes
+    this.app.use('/', setupFeedRoutes(this.feedService));
   }
 }

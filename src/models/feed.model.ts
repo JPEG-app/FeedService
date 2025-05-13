@@ -5,6 +5,7 @@ export interface FeedItem {
   postTitle: string;
   postContent: string;
   createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface Feed {
