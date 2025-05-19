@@ -1,8 +1,9 @@
-// feed-service/src/kafka/consumer.ts
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
 import * as dotenv from 'dotenv';
 import { FeedService } from '../services/feed.service';
 import { PostCreatedEventData, UserLifecycleEvent } from '../models/events.model';
+import winston from 'winston';
+import { v4 as uuidv4 } from 'uuid'; 
 
 dotenv.config();
 
@@ -16,103 +17,153 @@ const kafka = new Kafka({
   clientId: clientId,
   brokers: [kafkaBroker],
   retry: {
-    initialRetryTime: 300,
-    retries: 5,
-  },
+    initialRetryTime: 3000, 
+    retries: 30,            
+    maxRetryTime: 30000,   
+    factor: 2,           
+    multiplier: 2,    
+  }
 });
 
 let consumer: Consumer | null = null;
 let feedServiceInstance: FeedService | null = null;
+let kafkaLogger: winston.Logger | null = null;
 
-export const initializeFeedServiceForConsumer = (service: FeedService) => {
+export const initializeFeedServiceForConsumer = (service: FeedService, loggerInstance: winston.Logger) => {
   feedServiceInstance = service;
+  kafkaLogger = loggerInstance;
 };
 
 const handleMessage = async ({ topic, partition, message }: EachMessagePayload): Promise<void> => {
+  const correlationId = message.headers?.['X-Correlation-ID']?.toString() || 
+                        message.headers?.['correlationId']?.toString() || 
+                        uuidv4();
+  
+  const messageLogInfo = {
+    topic,
+    partition,
+    offset: message.offset,
+    messageKey: message.key?.toString(),
+    correlationId, 
+    type: 'KafkaConsumerLog.MessageReceived'
+  };
+
+  const currentLogger = kafkaLogger || console; 
+
   if (!feedServiceInstance) {
-    console.error('FeedService instance not initialized for Kafka consumer. Message skipped.');
+    currentLogger.error('FeedService instance not initialized for Kafka consumer. Message skipped.', messageLogInfo);
     return;
   }
   if (!message.value) {
-    console.warn(`Kafka consumer received message with no value from topic ${topic}.`);
+    currentLogger.warn(`Kafka consumer received message with no value.`, messageLogInfo);
     return;
   }
 
   const eventDataString = message.value.toString();
-  console.log(`FeedService Consumer: Received message from topic ${topic}, partition ${partition}`);
+  currentLogger.info(`Processing Kafka message.`, { ...messageLogInfo, dataPreview: eventDataString.substring(0, 200) + '...' });
 
   try {
     if (topic === postEventsTopic) {
       const event: PostCreatedEventData = JSON.parse(eventDataString);
       if (event.eventType === 'PostCreated' && event.postId) {
-        await feedServiceInstance.processNewPostEvent(event);
+        await feedServiceInstance.processNewPostEvent(event, correlationId);
       } else {
-        console.warn(`FeedService Consumer: Received non-PostCreated event or event missing postId from topic ${postEventsTopic}:`, eventDataString);
+        currentLogger.warn(`Received non-PostCreated event or event missing postId.`, { ...messageLogInfo, eventType: event.eventType, topic: postEventsTopic, eventData: eventDataString, type: 'KafkaConsumerLog.MalformedEvent' });
       }
     } else if (topic === userLifecycleTopic) {
       const event: UserLifecycleEvent = JSON.parse(eventDataString);
       if (event.userId && event.eventType) {
-        await feedServiceInstance.processUserLifecycleEvent(event);
+        await feedServiceInstance.processUserLifecycleEvent(event, correlationId);
       } else {
-        console.warn(`FeedService Consumer: Received malformed user event from topic ${userLifecycleTopic}:`, eventDataString);
+        currentLogger.warn(`Received malformed user event.`, { ...messageLogInfo, topic: userLifecycleTopic, eventData: eventDataString, type: 'KafkaConsumerLog.MalformedEvent' });
       }
     } else {
-      console.warn(`FeedService Consumer: Received message from unhandled topic ${topic}`);
+      currentLogger.warn(`Received message from unhandled topic.`, { ...messageLogInfo, topic, type: 'KafkaConsumerLog.UnhandledTopic' });
     }
-  } catch (error) {
-    console.error(`FeedService Consumer: Error processing event from topic ${topic}. Error: ${error}. EventData: ${eventDataString}`);
+    currentLogger.info(`Successfully processed Kafka message.`, { ...messageLogInfo, type: 'KafkaConsumerLog.MessageProcessed' });
+  } catch (error: any) {
+    currentLogger.error(`Error processing Kafka event.`, {
+        ...messageLogInfo,
+        error: error.message,
+        stack: error.stack,
+        eventData: eventDataString,
+        type: 'KafkaConsumerLog.ProcessingError'
+    });
   }
 };
 
 export const startFeedConsumers = async (): Promise<void> => {
+  const currentLogger = kafkaLogger || console;
   if (consumer) {
-    console.log('Feed service Kafka consumers already running.');
+    currentLogger.info('Feed service Kafka consumers already running.', { type: 'KafkaConsumerControlLog.Start' });
     return;
   }
   if (!feedServiceInstance) {
-    throw new Error('FeedService instance must be initialized via initializeFeedServiceForConsumer before starting consumers.');
+    const errMsg = 'FeedService instance must be initialized via initializeFeedServiceForConsumer before starting consumers.';
+    currentLogger.error(errMsg, { type: 'KafkaConsumerControlLog.StartError' });
+    throw new Error(errMsg);
   }
+  if (!kafkaLogger) { 
+    const errMsg = 'Logger not initialized for Kafka consumers.';
+    console.error(errMsg);
+    throw new Error(errMsg);
+  }
+
 
   consumer = kafka.consumer({ groupId: consumerGroupId });
 
   try {
     await consumer.connect();
-    console.log(`FeedService Kafka Consumer [${clientId}] connected to ${kafkaBroker} for group ${consumerGroupId}`);
+    currentLogger.info(`Kafka Consumer [${clientId}] connected to ${kafkaBroker} for group ${consumerGroupId}`, { clientId, kafkaBroker, consumerGroupId, type: 'KafkaConsumerControlLog.Connected' });
 
     await consumer.subscribe({ topic: postEventsTopic, fromBeginning: true });
-    console.log(`FeedService Consumer: Subscribed to topic [${postEventsTopic}] from beginning.`);
+    currentLogger.info(`Subscribed to topic [${postEventsTopic}] from beginning.`, { topic: postEventsTopic, type: 'KafkaConsumerControlLog.Subscribed' });
 
     await consumer.subscribe({ topic: userLifecycleTopic, fromBeginning: true });
-    console.log(`FeedService Consumer: Subscribed to topic [${userLifecycleTopic}] from beginning.`);
+    currentLogger.info(`Subscribed to topic [${userLifecycleTopic}] from beginning.`, { topic: userLifecycleTopic, type: 'KafkaConsumerControlLog.Subscribed' });
 
     await consumer.run({
       eachMessage: handleMessage,
     });
-    console.log('Feed service Kafka consumers are now running...');
-  } catch (error) {
-    console.error(`Failed to start FeedService Kafka Consumer [${clientId}]:`, error);
+    currentLogger.info('Feed service Kafka consumers are now running...', { type: 'KafkaConsumerControlLog.Running' });
+  } catch (error: any) {
+    currentLogger.error(`Failed to start Kafka Consumer [${clientId}].`, {
+        clientId,
+        error: error.message,
+        stack: error.stack,
+        type: 'KafkaConsumerControlLog.StartError'
+    });
     if (consumer) {
       await consumer.disconnect().catch(disconnectError => {
-        console.error('Error disconnecting consumer after startup failure:', disconnectError);
+        currentLogger.error('Error disconnecting consumer after startup failure.', {
+            error: (disconnectError as Error).message,
+            type: 'KafkaConsumerControlLog.DisconnectError'
+        });
       });
       consumer = null;
     }
-    throw error; // Re-throw to allow main application to handle startup failure
+    throw error;
   }
 };
 
 export const stopFeedConsumers = async (): Promise<void> => {
+  const currentLogger = kafkaLogger || console;
   if (consumer) {
     try {
-      console.log(`FeedService Kafka Consumer [${clientId}] disconnecting...`);
+      currentLogger.info(`Kafka Consumer [${clientId}] disconnecting...`, { clientId, type: 'KafkaConsumerControlLog.Disconnecting' });
       await consumer.disconnect();
-      console.log(`FeedService Kafka Consumer [${clientId}] disconnected successfully.`);
-    } catch (error) {
-      console.error(`Error disconnecting FeedService Kafka Consumer [${clientId}]:`, error);
+      currentLogger.info(`Kafka Consumer [${clientId}] disconnected successfully.`, { clientId, type: 'KafkaConsumerControlLog.Disconnected' });
+    } catch (error: any) {
+      currentLogger.error(`Error disconnecting Kafka Consumer [${clientId}].`, {
+          clientId,
+          error: error.message,
+          stack: error.stack,
+          type: 'KafkaConsumerControlLog.DisconnectError'
+      });
     } finally {
       consumer = null;
     }
   } else {
-    console.log('Feed service Kafka consumers were not running or already stopped.');
+    currentLogger.info('Feed service Kafka consumers were not running or already stopped.', { type: 'KafkaConsumerControlLog.Stop' });
   }
 };

@@ -1,6 +1,6 @@
-// feed-service/src/controllers/feed.controller.ts
-import { Request, Response } from 'express';
+import { Request as ExpressRequest, Response } from 'express';
 import { FeedService } from '../services/feed.service';
+import logger, { RequestWithId } from '../utils/logger';
 
 export class FeedController {
   private feedService: FeedService;
@@ -9,13 +9,23 @@ export class FeedController {
     this.feedService = feedService;
   }
 
-  async getFeed(req: Request, res: Response) {
+  async getFeed(req: ExpressRequest, res: Response) {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+
     try {
-      const feedItems = await this.feedService.getFeed();
-      res.json(feedItems); // Returns an array of FeedItem
+      logger.info('FeedController: getFeed initiated', { correlationId, type: 'ControllerLog.getFeed' });
+      const feedItems = await this.feedService.getFeed(correlationId);
+      logger.info(`FeedController: getFeed successful, returning ${feedItems.length} items`, { correlationId, count: feedItems.length, type: 'ControllerLog.getFeed' });
+      res.json(feedItems);
     } catch (error: any) {
-      console.error('Error in FeedController getFeed:', error);
-      res.status(500).json({ message: 'Internal server error retrieving feed' });
+      logger.error('Error in FeedController getFeed', {
+        correlationId,
+        error: error.message,
+        stack: error.stack,
+        type: 'ControllerErrorLog.getFeed'
+      });
+      res.status(500).json({ message: 'Internal server error retrieving feed', correlationId });
     }
   }
 }

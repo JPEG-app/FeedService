@@ -1,27 +1,33 @@
-// feed-service/src/routes/feed.routes.ts
-import express from 'express';
+import express, { Request as ExpressRequest, Response } from 'express';
 import { FeedController } from '../controllers/feed.controller';
 import { FeedService } from '../services/feed.service';
+import logger, { RequestWithId } from '../utils/logger';
 
 const router = express.Router();
 
-// The FeedService instance will be passed from app.ts/index.ts
 export const setupFeedRoutes = (feedServiceInstance: FeedService) => {
   const feedController = new FeedController(feedServiceInstance);
 
   router.get('/feed', feedController.getFeed.bind(feedController));
 
-  // Optional endpoint for testing cache clearing
-  router.post('/feed/admin/clear-cache', (req, res) => {
+  router.post('/feed/admin/clear-cache', (req: ExpressRequest, res: Response) => {
+    const typedReq = req as RequestWithId;
+    const correlationId = typedReq.id;
+
     if (feedServiceInstance && typeof feedServiceInstance.clearAllCaches === 'function') {
-      feedServiceInstance.clearAllCaches();
-      res.status(200).send({ message: 'Feed caches cleared successfully.' });
+      try {
+        feedServiceInstance.clearAllCaches(correlationId);
+        logger.info('Feed caches cleared successfully via admin endpoint.', { correlationId, type: 'AdminActionLog.ClearCacheSuccess' });
+        res.status(200).send({ message: 'Feed caches cleared successfully.', correlationId });
+      } catch (e: any) {
+        logger.error('Error clearing cache via admin endpoint.', { correlationId, error: e.message, stack: e.stack, type: 'AdminActionLog.ClearCacheError' });
+        res.status(500).send({ message: 'Error clearing caches.', correlationId });
+      }
     } else {
-      res.status(500).send({ message: 'Feed service or clear cache method not available.'});
+      logger.error('Feed service or clearAllCaches method not available for admin endpoint.', { correlationId, type: 'AdminActionLog.ClearCacheFail' });
+      res.status(500).send({ message: 'Feed service or clear cache method not available.', correlationId });
     }
   });
 
   return router;
 };
-
-// Remove 'export default router;' if you are only using the setupFeedRoutes function
