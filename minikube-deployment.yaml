@@ -5,8 +5,8 @@ metadata:
 data:
   NODE_ENV: "production"
   PORT: "3003"
-  # USER_SERVICE_URL: "http://user-service-service:3001"
-  POST_SERVICE_URL: "http://192.168.49.2:32082"
+  USER_SERVICE_URL: "http://user-service-service:3001"
+  POST_SERVICE_URL: "http://post-service-service:3002"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -24,8 +24,8 @@ spec:
     spec:
       containers:
       - name: feed-service
-        image: feed-service:latest
-        imagePullPolicy: Never
+        image: dgeorgiev0348/feed-service:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 3003 
         envFrom:
@@ -44,7 +44,7 @@ spec:
     port: 3003
     targetPort: 3003
   type: NodePort
-  ---
+---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -54,7 +54,7 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: feed-service-deployment
-  minReplicas: 2
+  minReplicas: 1
   maxReplicas: 5
   metrics:
   - type: Resource

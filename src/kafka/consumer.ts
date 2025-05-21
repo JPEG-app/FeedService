@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 dotenv.config();
 
-const kafkaBroker = process.env.KAFKA_BROKER || 'kafka:9092';
+const kafkaBroker = process.env.KAFKA_BROKER || 'kafka.kafka-ca1.svc.cluster.local:9092';
 const clientId = process.env.KAFKA_CLIENT_ID_FEED || 'feed-service-consumer';
 const postEventsTopic = process.env.POST_EVENTS_TOPIC || 'post_events';
 const userLifecycleTopic = process.env.USER_LIFECYCLE_TOPIC || 'user_lifecycle_events';
