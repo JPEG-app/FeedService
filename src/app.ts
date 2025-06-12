@@ -37,6 +37,8 @@ export class App {
       credentials: true,
     };
     this.app.use(cors(corsOptions));
+    this.app.options('*', cors(corsOptions));
+
     this.app.use(bodyParser.json());
     this.app.use(bodyParser.urlencoded({ extended: false }));
     this.app.use(requestLogger);
