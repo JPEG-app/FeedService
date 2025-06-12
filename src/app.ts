@@ -22,8 +22,8 @@ export class App {
   private config(): void {
     this.app.use(assignRequestId);
     const allowedOrigins = [
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
+      'https://jpegapp.lol',
+      'https://www.jpegapp.lol'
     ];
     const corsOptions: cors.CorsOptions = {
       origin: function (origin, callback) {
