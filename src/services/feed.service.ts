@@ -54,6 +54,7 @@ export class FeedService {
 
     if (idsToFetch.length > 0) {
         const usersFromRepo = await this.feedRepository.getUsersByIds(correlationId, authorizationHeader);
+        console.log(usersFromRepo)
         usersFromRepo.forEach(user => {
             usernames.set(user.userId, user.username);
             this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${user.userId}`, user.username);
@@ -61,7 +62,8 @@ export class FeedService {
     }
 
     const bootstrappedFeed: FeedItem[] = posts.map(post => {
-      const authorUsername = usernames.get(post.userId) || 'Unknown User';
+      console.log(usernames)
+      const authorUsername = usernames.get(post.userId) || 'User';
       return {
         postId: post.postId,
         userId: post.userId,
