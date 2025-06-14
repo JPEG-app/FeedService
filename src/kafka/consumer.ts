@@ -11,7 +11,6 @@ const kafkaBroker = process.env.KAFKA_BROKER || 'kafka.kafka-ca1.svc.cluster.loc
 const clientId = process.env.KAFKA_CLIENT_ID_FEED || 'feed-service-consumer';
 const postEventsTopic = process.env.POST_EVENTS_TOPIC || 'post_events';
 const userLifecycleTopic = process.env.USER_LIFECYCLE_TOPIC || 'user_lifecycle_events';
-
 const postConsumerGroupIdBase = process.env.KAFKA_CONSUMER_GROUP_FEED_POSTS || 'feed-service-post-events-group';
 const userConsumerGroupIdBase = process.env.KAFKA_CONSUMER_GROUP_FEED_USERS || 'feed-service-user-events-group';
 
@@ -22,11 +21,7 @@ const kafka = new Kafka({
   clientId: clientId,
   brokers: [kafkaBroker],
   retry: {
-    initialRetryTime: 3000,
-    retries: 30,
-    maxRetryTime: 30000,
-    factor: 2,
-    multiplier: 2,
+    initialRetryTime: 3000, retries: 30, maxRetryTime: 30000, factor: 2, multiplier: 2,
   }
 });
 
@@ -35,38 +30,33 @@ let userConsumer: Consumer | null = null;
 let feedServiceInstance: FeedService | null = null;
 let kafkaLogger: winston.Logger | null = null;
 
+let idleTimeout: NodeJS.Timeout;
+let replayFinishedResolver: (value: void | PromiseLike<void>) => void;
+
 export const initializeFeedServiceForConsumer = (service: FeedService, loggerInstance: winston.Logger) => {
   feedServiceInstance = service;
   kafkaLogger = loggerInstance;
 };
 
+const setIdleTimer = () => {
+    clearTimeout(idleTimeout);
+    idleTimeout = setTimeout(() => {
+        const currentLogger = kafkaLogger || console;
+        currentLogger.info('Kafka consumer idle, assuming historical replay is complete. Feed is ready.');
+        if(replayFinishedResolver) {
+            replayFinishedResolver();
+        }
+    }, 5000);
+};
+
 const handleMessage = async ({ topic, partition, message }: EachMessagePayload): Promise<void> => {
-  const correlationId = message.headers?.['X-Correlation-ID']?.toString() ||
-                        message.headers?.['correlationId']?.toString() ||
-                        uuidv4();
-
-  const messageLogInfo = {
-    topic,
-    partition,
-    offset: message.offset,
-    messageKey: message.key?.toString(),
-    correlationId,
-    type: 'KafkaConsumerLog.MessageReceived'
-  };
-
+  setIdleTimer();
+  const correlationId = message.headers?.['X-Correlation-ID']?.toString() || uuidv4();
   const currentLogger = kafkaLogger || console;
 
-  if (!feedServiceInstance) {
-    currentLogger.error('FeedService instance not initialized for Kafka consumer. Message skipped.', messageLogInfo);
-    return;
-  }
-  if (!message.value) {
-    currentLogger.warn(`Kafka consumer received message with no value.`, messageLogInfo);
-    return;
-  }
+  if (!feedServiceInstance || !message.value) return;
 
   const eventDataString = message.value.toString();
-  currentLogger.info(`Processing Kafka message.`, { ...messageLogInfo, dataPreview: eventDataString.substring(0, 200) + '...' });
 
   try {
     const genericEvent = JSON.parse(eventDataString);
@@ -82,91 +72,57 @@ const handleMessage = async ({ topic, partition, message }: EachMessagePayload):
         case 'PostUnliked':
           await feedServiceInstance.processPostUnlikedEvent(genericEvent as PostUnlikedEventData, correlationId);
           break;
-        default:
-          currentLogger.warn(`Received unknown eventType on post_events topic.`, { ...messageLogInfo, eventType: genericEvent.eventType, topic: postEventsTopic, type: 'KafkaConsumerLog.UnknownEventType' });
       }
     } else if (topic === userLifecycleTopic) {
-      const event: UserLifecycleEvent = genericEvent;
-      if (event.userId && event.eventType) {
-        await feedServiceInstance.processUserLifecycleEvent(event, correlationId);
-      } else {
-        currentLogger.warn(`Received malformed user event.`, { ...messageLogInfo, topic: userLifecycleTopic, eventData: eventDataString, type: 'KafkaConsumerLog.MalformedEvent' });
-      }
-    } else {
-      currentLogger.warn(`Received message from unhandled topic.`, { ...messageLogInfo, topic, type: 'KafkaConsumerLog.UnhandledTopic' });
+        await feedServiceInstance.processUserLifecycleEvent(genericEvent as UserLifecycleEvent, correlationId);
     }
-
-    currentLogger.info(`Successfully processed Kafka message.`, { ...messageLogInfo, type: 'KafkaConsumerLog.MessageProcessed' });
   } catch (error: any) {
     currentLogger.error(`Error processing Kafka event.`, {
-        ...messageLogInfo,
-        error: error.message,
-        stack: error.stack,
-        eventData: eventDataString,
-        type: 'KafkaConsumerLog.ProcessingError'
+      error: error.message, stack: error.stack, eventData: eventDataString,
     });
   }
 };
 
 export const startFeedConsumers = async (): Promise<void> => {
-    const currentLogger = kafkaLogger || console;
-    if (postConsumer || userConsumer) {
-      currentLogger.info('Feed service Kafka consumers already running.', { type: 'KafkaConsumerControlLog.Start' });
-      return;
-    }
-    if (!feedServiceInstance) {
-      const errMsg = 'FeedService instance must be initialized before starting consumers.';
-      currentLogger.error(errMsg, { type: 'KafkaConsumerControlLog.StartError' });
-      throw new Error(errMsg);
-    }
-    if (!kafkaLogger) {
-      const errMsg = 'Logger not initialized for Kafka consumers.';
-      console.error(errMsg);
-      throw new Error(errMsg);
-    }
+    return new Promise(async (resolve, reject) => {
+        replayFinishedResolver = resolve;
+        const currentLogger = kafkaLogger || console;
+        
+        if (postConsumer || userConsumer) {
+            currentLogger.info('Feed service Kafka consumers already running.');
+            return resolve();
+        }
+        if (!feedServiceInstance || !kafkaLogger) {
+            return reject(new Error('FeedService or Logger not initialized.'));
+        }
 
-    postConsumer = kafka.consumer({ groupId: postConsumerGroupId });
-    userConsumer = kafka.consumer({ groupId: userConsumerGroupId });
+        postConsumer = kafka.consumer({ groupId: postConsumerGroupId });
+        userConsumer = kafka.consumer({ groupId: userConsumerGroupId });
 
-    try {
-        await postConsumer.connect();
-        currentLogger.info(`Kafka Consumer connected for group ${postConsumerGroupId}`, { groupId: postConsumerGroupId });
-        await postConsumer.subscribe({ topic: postEventsTopic, fromBeginning: true });
-        currentLogger.info(`Subscribed to topic [${postEventsTopic}] from beginning.`, { topic: postEventsTopic });
-        await postConsumer.run({ eachMessage: handleMessage });
+        try {
+            currentLogger.info('Starting historical data replay from Kafka...');
+            
+            await Promise.all([postConsumer.connect(), userConsumer.connect()]);
+            
+            await postConsumer.subscribe({ topic: postEventsTopic, fromBeginning: true });
+            await userConsumer.subscribe({ topic: userLifecycleTopic, fromBeginning: true });
 
-        await userConsumer.connect();
-        currentLogger.info(`Kafka Consumer connected for group ${userConsumerGroupId}`, { groupId: userConsumerGroupId });
-        await userConsumer.subscribe({ topic: userLifecycleTopic, fromBeginning: true });
-        currentLogger.info(`Subscribed to topic [${userLifecycleTopic}] from beginning.`, { topic: userLifecycleTopic });
-        await userConsumer.run({ eachMessage: handleMessage });
+            setIdleTimer();
 
-        currentLogger.info('All Feed service Kafka consumers are now running...', { type: 'KafkaConsumerControlLog.Running' });
-    } catch (error: any) {
-        currentLogger.error(`Failed to start Kafka Consumers.`, { error: (error as Error).message, stack: (error as Error).stack });
-        await stopFeedConsumers();
-        throw error;
-    }
+            await postConsumer.run({ eachMessage: handleMessage });
+            await userConsumer.run({ eachMessage: handleMessage });
+
+        } catch (error: any) {
+            currentLogger.error(`Failed to start Kafka Consumers.`, { error: error.message });
+            await stopFeedConsumers();
+            reject(error);
+        }
+    });
 };
 
 export const stopFeedConsumers = async (): Promise<void> => {
-    const currentLogger = kafkaLogger || console;
-    const consumersToStop = [
-        { consumer: postConsumer, name: 'Posts' },
-        { consumer: userConsumer, name: 'Users' }
-    ];
-
-    for (const item of consumersToStop) {
-        if (item.consumer) {
-            try {
-                currentLogger.info(`Disconnecting ${item.name} consumer...`);
-                await item.consumer.disconnect();
-                currentLogger.info(`${item.name} consumer disconnected successfully.`);
-            } catch (error) {
-                currentLogger.error(`Error disconnecting ${item.name} consumer`, { error: (error as Error).message });
-            }
-        }
-    }
+    if (postConsumer) await postConsumer.disconnect();
+    if (userConsumer) await userConsumer.disconnect();
     postConsumer = null;
     userConsumer = null;
 };

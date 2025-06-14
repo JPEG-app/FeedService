@@ -1,6 +1,6 @@
 import { App } from './app';
 import * as dotenv from 'dotenv';
-import { startFeedConsumers, stopFeedConsumers } from './kafka/consumer';
+import { stopFeedConsumers } from './kafka/consumer';
 
 dotenv.config();
 
@@ -9,13 +9,13 @@ const port = process.env.PORT || 3003;
 const startService = async () => {
   try {
     const appInstance = new App();
+    
+    await appInstance.bootstrap();
+    
     const expressApp = appInstance.app;
-
-    await startFeedConsumers();
-    console.log('Feed service Kafka consumers started successfully.');
-
+    
     const server = expressApp.listen(port, () => {
-      console.log(`Feed Service is running on port ${port}`);
+      console.log(`Feed Service is ready and listening on port ${port}`);
     });
 
     const shutdown = async (signal: string) => {
