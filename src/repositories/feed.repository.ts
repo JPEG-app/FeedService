@@ -63,7 +63,7 @@ export class FeedRepository {
       return [];
     }
     const params = new URLSearchParams({ ids: userIds.join(',') });
-    const requestUrl = `${this.userServiceUrl}/users?${params.toString()}`;
+    const requestUrl = `${this.userServiceUrl}/users`;
     
     const headers: Record<string, string> = {};
     if (correlationId) headers['X-Correlation-ID'] = correlationId;
