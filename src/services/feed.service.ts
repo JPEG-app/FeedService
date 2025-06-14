@@ -5,7 +5,7 @@ import winston from 'winston';
 import axios from 'axios';
 
 // This is the internal Kubernetes address for the post-service
-const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-deployment.default.svc.cluster.local:3000';
+const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
 export class FeedService {
