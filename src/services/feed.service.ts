@@ -1,44 +1,130 @@
 import { FeedItem } from '../models/feed.model';
-import { FeedRepository } from '../repositories/feed.repository';
+import { PostCreatedEventData, UserLifecycleEvent } from '../models/events.model';
+import NodeCache from 'node-cache';
 import winston from 'winston';
+import { FeedRepository } from '../repositories/feed.repository';
+
+const FEED_CACHE_KEY = 'aggregated-feed-items';
+const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
 export class FeedService {
+  private feedItemsCache: NodeCache;
+  private userDetailsCache: NodeCache;
   private logger: winston.Logger;
-  private feedRepository: FeedRepository;
+  private feedRepo: FeedRepository;
 
-  constructor(feedRepository: FeedRepository, loggerInstance: winston.Logger) {
-    this.feedRepository = feedRepository;
+  constructor(loggerInstance: winston.Logger, feedRepo: FeedRepository) {
     this.logger = loggerInstance;
+    this.feedRepo = feedRepo;
+    this.feedItemsCache = new NodeCache({ stdTTL: 0, checkperiod: 0, useClones: false });
+    this.userDetailsCache = new NodeCache({ stdTTL: 0, checkperiod: 0 });
+
+    if (!this.feedItemsCache.has(FEED_CACHE_KEY)) {
+      this.feedItemsCache.set(FEED_CACHE_KEY, []);
+      this.logger.info('FeedService: Initialized empty feedItemsCache.', { cacheKey: FEED_CACHE_KEY, type: 'CacheLog.Init' });
+    }
   }
 
-  async getFeed(correlationId?: string, authorizationHeader?: string): Promise<FeedItem[]> {
-    this.logger.info(`FeedService: Fetching fresh feed from repository.`, { correlationId });
+  async getFeed(correlationId?: string, authHeader?: string): Promise<FeedItem[]> {
+    const cacheKey = FEED_CACHE_KEY;
+    let cachedFeedItems = this.feedItemsCache.get<FeedItem[]>(cacheKey);
 
-    const posts = await this.feedRepository.getPosts(correlationId, authorizationHeader);
-    if (posts.length === 0) {
-      return [];
-    }
+    if (!cachedFeedItems || cachedFeedItems.length === 0) {
+      this.logger.warn('FeedService: Cache is empty. Loading posts from repository.', { correlationId, type: 'CacheLog.Miss.Load' });
 
-    // const userIds = [...new Set(posts.map(post => post.userId))];
-    const usersFromRepo = await this.feedRepository.getUsersByIds(correlationId, authorizationHeader);
+      const posts = await this.feedRepo.getPosts(correlationId, authHeader);
+      const users = await this.feedRepo.getUsersByIds(correlationId, authHeader);
 
-    const usernames = new Map(usersFromRepo.map(user => [user.userId, user.username]));
+      const userMap = new Map(users.map(user => [user.userId, user.username]));
 
-    const feedItems: FeedItem[] = posts.map(post => {
-      const authorUsername = usernames.get(post.userId) || 'Unknown User';
-      return {
+      cachedFeedItems = posts.map(post => ({
         postId: post.postId,
         userId: post.userId,
-        authorUsername: authorUsername,
+        authorUsername: userMap.get(post.userId) || 'Unknown User',
         postTitle: post.title,
         postContent: post.content,
         createdAt: new Date(post.createdAt),
         updatedAt: new Date(post.updatedAt),
-        likeCount: post.likeCount,
-        hasUserLiked: post.hasUserLiked,
-      };
-    });
-    
-    return feedItems.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        likeCount: post.likeCount || 0,
+        hasUserLiked: post.hasUserLiked
+      }));
+
+      this.feedItemsCache.set(cacheKey, cachedFeedItems);
+      cachedFeedItems.forEach(item => {
+        const userKey = `${USER_DETAIL_CACHE_PREFIX}${item.userId}`;
+        if (!this.userDetailsCache.has(userKey)) {
+          this.userDetailsCache.set(userKey, item.authorUsername);
+        }
+      });
+
+      this.logger.info('FeedService: Fetched and cached posts + usernames.', { correlationId, count: cachedFeedItems.length, type: 'RepoLoad.FeedInit' });
+    } else {
+      this.logger.info('FeedService: Cache hit for feed items.', { correlationId, cacheKey, action: 'hit', count: cachedFeedItems.length, type: 'CacheLog.GetFeed' });
+    }
+
+    const sortedFeed = cachedFeedItems.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return sortedFeed;
+  }
+
+  async processNewPostEvent(postEvent: PostCreatedEventData, correlationId?: string): Promise<void> {
+    this.logger.info('FeedService: Processing PostCreatedEvent', { correlationId, postId: postEvent.postId, userId: postEvent.userId, type: 'EventProcessingLog.PostCreated' });
+
+    const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${postEvent.userId}`;
+    let username = this.userDetailsCache.get<string>(userCacheKey);
+
+    if (!username) {
+      const users = await this.feedRepo.getUsersByIds(correlationId);
+      const user = users.find(u => u.userId === postEvent.userId);
+      username = user?.username || 'Unknown User';
+
+      if (username !== 'Unknown User') {
+        this.userDetailsCache.set(userCacheKey, username);
+        this.logger.info('FeedService: Username cached after lookup.', { correlationId, userId: postEvent.userId, username });
+      } else {
+        this.logger.warn('FeedService: Could not resolve username for userId.', { correlationId, userId: postEvent.userId });
+      }
+    }
+
+    const newFeedItem: FeedItem = {
+      postId: postEvent.postId,
+      userId: postEvent.userId,
+      authorUsername: username,
+      postTitle: postEvent.title,
+      postContent: postEvent.content,
+      createdAt: new Date(postEvent.createdAt),
+      updatedAt: new Date(postEvent.updatedAt),
+      likeCount: 0
+    };
+
+    let currentFeedItems = this.feedItemsCache.get<FeedItem[]>(FEED_CACHE_KEY) || [];
+    currentFeedItems = currentFeedItems.filter(item => item.postId !== newFeedItem.postId);
+    currentFeedItems.unshift(newFeedItem);
+    this.feedItemsCache.set(FEED_CACHE_KEY, currentFeedItems);
+
+    this.logger.info('FeedService: Added/Updated post in feed cache.', { correlationId, postId: newFeedItem.postId, newSize: currentFeedItems.length });
+  }
+
+  async processUserLifecycleEvent(userEvent: UserLifecycleEvent, correlationId?: string): Promise<void> {
+    const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${userEvent.userId}`;
+    this.logger.info('FeedService: Processing UserLifecycleEvent', { correlationId, eventType: userEvent.eventType, userId: userEvent.userId });
+
+    if ((userEvent.eventType === 'UserCreated' || userEvent.eventType === 'UserUpdated') && userEvent.username) {
+      this.userDetailsCache.set(userCacheKey, userEvent.username);
+      this.logger.info('FeedService: Cached username for user.', { correlationId, userId: userEvent.userId, username: userEvent.username });
+    } else if (userEvent.eventType === 'UserDeleted') {
+      const deleted = this.userDetailsCache.del(userCacheKey);
+      if (deleted) {
+        this.logger.info('FeedService: Removed username from cache.', { correlationId, userId: userEvent.userId });
+      } else {
+        this.logger.info('FeedService: Tried to delete username from cache but key was not found.', { correlationId, userId: userEvent.userId });
+      }
+    }
+  }
+
+  clearAllCaches(correlationId?: string): void {
+    this.feedItemsCache.flushAll();
+    this.userDetailsCache.flushAll();
+    this.feedItemsCache.set(FEED_CACHE_KEY, []);
+    this.logger.info('FeedService: All caches cleared.', { correlationId });
   }
 }
