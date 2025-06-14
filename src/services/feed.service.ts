@@ -4,7 +4,6 @@ import NodeCache from 'node-cache';
 import winston from 'winston';
 import axios from 'axios';
 
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service-service:3001';
 const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
@@ -17,18 +16,24 @@ export class FeedService {
     this.userDetailsCache = new NodeCache({ stdTTL: 0, checkperiod: 0 });
   }
 
-  async getFeed(correlationId?: string, requestingAuthUserId?: string): Promise<FeedItem[]> {
-    this.logger.info(`FeedService: Fetching posts directly from PostService`, { correlationId, authUserId: requestingAuthUserId });
+  async getFeed(correlationId?: string, authorizationHeader?: string): Promise<FeedItem[]> {
+    this.logger.info(`FeedService: Fetching posts from PostService`, { 
+        correlationId, 
+        isAuthenticated: !!authorizationHeader 
+    });
 
     try {
-      const headers: Record<string, string> = { 'X-Correlation-ID': correlationId || '' };
-      if (requestingAuthUserId) {
-        headers['X-User-ID'] = requestingAuthUserId;
+      const headers: Record<string, string> = {};
+      if (correlationId) {
+        headers['X-Correlation-ID'] = correlationId;
+      }
+      if (authorizationHeader) {
+        headers['Authorization'] = authorizationHeader;
       }
 
       const response = await axios.get(`${POST_SERVICE_URL}/posts`, { headers });
       const posts: any[] = response.data;
-      console.log(posts)
+
       const feedItems: FeedItem[] = posts.map(post => {
         const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${post.userId}`;
         const authorUsername = this.userDetailsCache.get<string>(userCacheKey) || 'Unknown User';

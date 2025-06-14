@@ -52,7 +52,7 @@ export class FeedRepository {
       });
 
       const posts = postsResponse.data;
-      console.log(posts)
+
       const feedItems: FeedItem[] = posts.map((post: any) => ({
         postId: post.post_id,
         userId: post.user_id,
