@@ -12,12 +12,11 @@ export class FeedController {
   async getFeed(req: ExpressRequest, res: Response) {
     const typedReq = req as RequestWithId;
     const correlationId = typedReq.id;
-    const authUserId = typedReq.authUserId;
 
     try {
-      logger.info('FeedController: getFeed initiated', { correlationId, authUserId, type: 'ControllerLog.getFeed' });
-      const feedItems = await this.feedService.getFeed(correlationId, authUserId);
-      logger.info(`FeedController: getFeed successful, returning ${feedItems.length} items`, { correlationId, count: feedItems.length, type: 'ControllerLog.getFeedSuccess' });
+      logger.info('FeedController: getFeed initiated', { correlationId, type: 'ControllerLog.getFeed' });
+      const feedItems = await this.feedService.getFeed(correlationId);
+      logger.info(`FeedController: getFeed successful, returning ${feedItems.length} items`, { correlationId, count: feedItems.length, type: 'ControllerLog.getFeed' });
       res.json(feedItems);
     } catch (error: any) {
       logger.error('Error in FeedController getFeed', {
