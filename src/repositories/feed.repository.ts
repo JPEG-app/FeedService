@@ -58,11 +58,7 @@ export class FeedRepository {
     }
   }
 
-  async getUsersByIds(userIds: string[], correlationId?: string, authorizationHeader?: string): Promise<UserFromService[]> {
-    if (userIds.length === 0) {
-      return [];
-    }
-    const params = new URLSearchParams({ ids: userIds.join(',') });
+  async getUsersByIds(correlationId?: string, authorizationHeader?: string): Promise<UserFromService[]> {
     const requestUrl = `${this.userServiceUrl}/users`;
     
     const headers: Record<string, string> = {};

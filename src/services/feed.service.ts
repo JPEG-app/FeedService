@@ -25,26 +25,27 @@ export class FeedService {
 
     const userIds = [...new Set(posts.map(post => post.userId))];
     const usernames = new Map<string, string>();
-    const idsToFetch: string[] = [];
+    // const idsToFetch: string[] = [];
 
     userIds.forEach(id => {
         const cachedUsername = this.userDetailsCache.get<string>(`${USER_DETAIL_CACHE_PREFIX}${id}`);
         if (cachedUsername) {
             usernames.set(id, cachedUsername);
-        } else {
-            idsToFetch.push(id);
-        }
+        } 
+        // else {
+        //     idsToFetch.push(id);
+        // }
     });
 
-    if (idsToFetch.length > 0) {
-        this.logger.info(`FeedService: Cache miss for ${idsToFetch.length} users. Fetching from repository.`, { correlationId });
-        const usersFromRepo = await this.feedRepository.getUsersByIds(idsToFetch, correlationId, authorizationHeader);
+    // if (idsToFetch.length > 0) {
+        // this.logger.info(`FeedService: Cache miss for ${idsToFetch.length} users. Fetching from repository.`, { correlationId });
+        const usersFromRepo = await this.feedRepository.getUsersByIds(correlationId, authorizationHeader);
         
         usersFromRepo.forEach(user => {
             usernames.set(user.userId, user.username);
             this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${user.userId}`, user.username);
         });
-    }
+    // }
 
     const feedItems: FeedItem[] = posts.map(post => {
       const authorUsername = usernames.get(post.userId) || 'Unknown User';
