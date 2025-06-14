@@ -18,7 +18,7 @@ export class App {
     this.app = express();
     
     const feedRepository = new FeedRepository(POST_SERVICE_URL, USER_SERVICE_URL, logger);
-    this.feedService = new FeedService(feedRepository, logger);
+    this.feedService = new FeedService(logger, feedRepository);
 
     initializeFeedServiceForConsumer(this.feedService, logger);
     this.config();
