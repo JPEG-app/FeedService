@@ -3,8 +3,12 @@ import bodyParser from 'body-parser';
 import cors from 'cors';
 import { setupFeedRoutes } from './routes/feed.routes';
 import { FeedService } from './services/feed.service';
+import { FeedRepository } from './repositories/feed.repository';
 import { initializeFeedServiceForConsumer } from './kafka/consumer';
 import logger, { assignRequestId, requestLogger, logError, RequestWithId } from './utils/logger';
+
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service-service:3001';
+const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
 
 export class App {
   public app: Application;
@@ -12,7 +16,10 @@ export class App {
 
   constructor() {
     this.app = express();
-    this.feedService = new FeedService(logger);
+    
+    const feedRepository = new FeedRepository(POST_SERVICE_URL, USER_SERVICE_URL, logger);
+    this.feedService = new FeedService(feedRepository, logger);
+
     initializeFeedServiceForConsumer(this.feedService, logger);
     this.config();
     this.routes();

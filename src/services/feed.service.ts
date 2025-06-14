@@ -1,34 +1,23 @@
-import { FeedItem } from '../models/feed.model';
-import { UserLifecycleEvent } from '../models/feed.model';
+import { FeedItem, UserLifecycleEvent } from '../models/feed.model';
+import { FeedRepository } from '../repositories/feed.repository';
 import NodeCache from 'node-cache';
 import winston from 'winston';
-import axios from 'axios';
 
-const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service-service:3001';
-const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
 export class FeedService {
   private userDetailsCache: NodeCache;
   private logger: winston.Logger;
+  private feedRepository: FeedRepository;
 
-  constructor(loggerInstance: winston.Logger) {
+  constructor(feedRepository: FeedRepository, loggerInstance: winston.Logger) {
+    this.feedRepository = feedRepository;
     this.logger = loggerInstance;
     this.userDetailsCache = new NodeCache({ stdTTL: 0, checkperiod: 0 });
   }
 
   async getFeed(correlationId?: string, authorizationHeader?: string): Promise<FeedItem[]> {
-    this.logger.info(`FeedService: Fetching posts from PostService`, { 
-        correlationId, 
-        isAuthenticated: !!authorizationHeader 
-    });
-
-    const headers: Record<string, string> = {};
-    if (correlationId) headers['X-Correlation-ID'] = correlationId;
-    if (authorizationHeader) headers['Authorization'] = authorizationHeader;
-    
-    const postsResponse = await axios.get(`${POST_SERVICE_URL}/posts`, { headers });
-    const posts: any[] = postsResponse.data;
+    const posts = await this.feedRepository.getPosts(correlationId, authorizationHeader);
 
     if (posts.length === 0) {
       return [];
@@ -48,18 +37,13 @@ export class FeedService {
     });
 
     if (idsToFetch.length > 0) {
-        this.logger.info(`FeedService: Cache miss for ${idsToFetch.length} users. Fetching in bulk.`, { correlationId });
-        try {
-            const bulkResponse = await axios.post(`${USER_SERVICE_URL}/users`, { userIds: idsToFetch }, { headers: { 'X-Correlation-ID': correlationId } });
-            const usersFromBulk: { userId: string, username: string }[] = bulkResponse.data;
-            
-            usersFromBulk.forEach(user => {
-                usernames.set(user.userId, user.username);
-                this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${user.userId}`, user.username);
-            });
-        } catch (error) {
-            this.logger.error('FeedService: Failed to fetch user details in bulk', { correlationId, error: (error as any).message });
-        }
+        this.logger.info(`FeedService: Cache miss for ${idsToFetch.length} users. Fetching from repository.`, { correlationId });
+        const usersFromRepo = await this.feedRepository.getUsersByIds(idsToFetch, correlationId);
+        
+        usersFromRepo.forEach(user => {
+            usernames.set(user.userId, user.username);
+            this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${user.userId}`, user.username);
+        });
     }
 
     const feedItems: FeedItem[] = posts.map(post => {
@@ -77,7 +61,6 @@ export class FeedService {
       };
     });
 
-    this.logger.info(`FeedService: Successfully fetched and processed ${feedItems.length} posts.`, { correlationId });
     return feedItems;
   }
 

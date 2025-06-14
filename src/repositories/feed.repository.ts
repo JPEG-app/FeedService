@@ -1,18 +1,37 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
-import { FeedItem } from '../models/feed.model';
 import winston from 'winston';
-import logger from '../utils/logger';
 import { v4 as uuidv4 } from 'uuid';
+
+export interface PostFromService {
+  postId: string;
+  userId: string;
+  title: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  likeCount: number;
+  hasUserLiked: boolean;
+}
+
+export interface UserFromService {
+  userId: string;
+  username: string;
+}
 
 export class FeedRepository {
   private postServiceUrl: string;
+  private userServiceUrl: string;
   private logger: winston.Logger;
   private axiosInstance = axios.create();
 
-
-  constructor(postServiceUrl: string, loggerInstance?: winston.Logger) {
+  constructor(
+    postServiceUrl: string,
+    userServiceUrl: string,
+    loggerInstance: winston.Logger
+  ) {
     this.postServiceUrl = postServiceUrl;
-    this.logger = loggerInstance || logger;
+    this.userServiceUrl = userServiceUrl;
+    this.logger = loggerInstance;
 
     this.axiosInstance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
         if (!config.headers['X-Correlation-ID']) {
@@ -22,80 +41,40 @@ export class FeedRepository {
     });
   }
 
-  async getFeedItems(correlationId?: string): Promise<FeedItem[]> {
-    const downstreamService = 'PostService';
+  async getPosts(correlationId?: string, authorizationHeader?: string): Promise<PostFromService[]> {
     const requestUrl = `${this.postServiceUrl}/posts`;
+    this.logger.info(`FeedRepository: Fetching posts from PostService.`, { correlationId, url: requestUrl });
     
-    const opCorrelationId = correlationId || uuidv4();
+    const headers: Record<string, string> = {};
+    if (correlationId) headers['X-Correlation-ID'] = correlationId;
+    if (authorizationHeader) headers['Authorization'] = authorizationHeader;
 
-    this.logger.info(`FeedRepository: Attempting to fetch posts from downstream service.`, {
-        correlationId: opCorrelationId,
-        downstreamService,
-        url: requestUrl,
-        method: 'GET',
-        type: 'ExternalCallLog.Attempt'
-    });
-
-    const startTime = Date.now();
     try {
-      const postsResponse = await this.axiosInstance.get(requestUrl);
-      const latencyMs = Date.now() - startTime;
+      const response = await this.axiosInstance.get<PostFromService[]>(requestUrl, { headers });
+      return response.data;
+    } catch (error) {
+      this.logger.error(`FeedRepository: Error fetching posts.`, { correlationId, error: (error as any).message });
+      throw new Error('Failed to fetch posts from downstream service.');
+    }
+  }
 
-      this.logger.info(`FeedRepository: Successfully fetched posts from downstream service.`, {
-        correlationId: opCorrelationId,
-        downstreamService,
-        url: requestUrl,
-        method: 'GET',
-        statusCode: postsResponse.status,
-        latencyMs,
-        type: 'ExternalCallLog.Success'
-      });
+  async getUsersByIds(userIds: string[], correlationId?: string): Promise<UserFromService[]> {
+    if (userIds.length === 0) {
+      return [];
+    }
+    const requestUrl = `${this.userServiceUrl}/users`;
+    this.logger.info(`FeedRepository: Fetching ${userIds.length} users in bulk from UserService.`, { correlationId, url: requestUrl });
 
-      const posts = postsResponse.data;
-
-      const feedItems: FeedItem[] = posts.map((post: any) => ({
-        postId: post.post_id,
-        userId: post.user_id,
-        authorUsername: 'User #1',
-        postTitle: post.title,
-        postContent: post.content,
-        createdAt: new Date(post.created_at),
-        updatedAt: new Date(post.updated_at),
-        likeCount: post.likeCount,
-        hasUserLiked: post.hasUserLiked
-      }));
-
-      feedItems.sort(
-        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    try {
+      const response = await this.axiosInstance.post<UserFromService[]>(
+        requestUrl,
+        { userIds },
+        { headers: { 'X-Correlation-ID': correlationId } }
       );
-
-      return feedItems;
-    } catch (error: any) {
-      const latencyMs = Date.now() - startTime;
-      const errorDetails: any = {
-        correlationId: opCorrelationId,
-        downstreamService,
-        url: requestUrl,
-        method: 'GET',
-        latencyMs,
-        error: error.message,
-        type: 'ExternalCallLog.Error'
-      };
-
-      if (axios.isAxiosError(error)) {
-        const axiosError = error as AxiosError;
-        errorDetails.statusCode = axiosError.response?.status;
-        errorDetails.requestPath = axiosError.request?.path;
-        if (axiosError.code) errorDetails.axiosErrorCode = axiosError.code;
-        if (axiosError.code === 'ECONNREFUSED') {
-            errorDetails.reason = 'Connection refused by downstream service.';
-        } else if (axiosError.code === 'ETIMEDOUT' || axiosError.message.toLowerCase().includes('timeout')) {
-            errorDetails.reason = 'Timeout while calling downstream service.';
-        }
-      }
-      
-      this.logger.error(`FeedRepository: Error fetching posts from downstream service.`, errorDetails);
-      throw new Error(`Failed to fetch feed data from ${downstreamService}: ${error.message}`);
+      return response.data;
+    } catch (error) {
+      this.logger.error(`FeedRepository: Error fetching users in bulk.`, { correlationId, error: (error as any).message });
+      return [];
     }
   }
 }
