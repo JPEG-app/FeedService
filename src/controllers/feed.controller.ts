@@ -1,31 +1,90 @@
-import { Request as ExpressRequest, Response } from 'express';
-import { FeedService } from '../services/feed.service';
-import logger, { RequestWithId } from '../utils/logger';
+import { FeedItem } from '../models/feed.model';
+import { UserLifecycleEvent } from '../models/feed.model';
+import NodeCache from 'node-cache';
+import winston from 'winston';
+import axios from 'axios';
 
-export class FeedController {
-  private feedService: FeedService;
+const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service-service:3001';
+const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
-  constructor(feedService: FeedService) {
-    this.feedService = feedService;
+export class FeedService {
+  private userDetailsCache: NodeCache;
+  private logger: winston.Logger;
+
+  constructor(loggerInstance: winston.Logger) {
+    this.logger = loggerInstance;
+    this.userDetailsCache = new NodeCache({ stdTTL: 0, checkperiod: 0 });
   }
 
-  async getFeed(req: ExpressRequest, res: Response) {
-    const typedReq = req as RequestWithId;
-    const correlationId = typedReq.id;
+  private async fetchAndCacheUsername(userId: string, correlationId?: string): Promise<string> {
+    try {
+      this.logger.info(`Cache miss for userId ${userId}. Fetching from UserService.`, { correlationId });
+      const response = await axios.get(`${USER_SERVICE_URL}/users/${userId}`);
+      const username = response.data?.username || 'Unknown User';
+      this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${userId}`, username);
+      return username;
+    } catch (error) {
+      this.logger.error(`Failed to fetch details for userId ${userId} from UserService.`, { correlationId });
+      return 'Unknown User';
+    }
+  }
+
+  async getFeed(correlationId?: string, requestingAuthUserId?: string): Promise<FeedItem[]> {
+    this.logger.info(`FeedService: Fetching posts directly from PostService`, { correlationId, authUserId: requestingAuthUserId });
 
     try {
-      logger.info('FeedController: getFeed initiated', { correlationId, type: 'ControllerLog.getFeed' });
-      const feedItems = await this.feedService.getFeed(correlationId);
-      logger.info(`FeedController: getFeed successful, returning ${feedItems.length} items`, { correlationId, count: feedItems.length, type: 'ControllerLog.getFeed' });
-      res.json(feedItems);
+      const headers: Record<string, string> = { 'X-Correlation-ID': correlationId || '' };
+      if (requestingAuthUserId) {
+        headers['X-User-ID'] = requestingAuthUserId;
+      }
+      
+      const response = await axios.get(`${POST_SERVICE_URL}/posts`, { headers });
+      const posts: any[] = response.data;
+
+      const feedItems = await Promise.all(posts.map(async (post) => {
+        const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${post.userId}`;
+        let authorUsername = this.userDetailsCache.get<string>(userCacheKey);
+
+        if (!authorUsername) {
+          authorUsername = await this.fetchAndCacheUsername(post.userId, correlationId);
+        }
+
+        return {
+          postId: post.postId,
+          userId: post.userId,
+          authorUsername: authorUsername,
+          postTitle: post.title,
+          postContent: post.content,
+          createdAt: new Date(post.createdAt),
+          updatedAt: new Date(post.updatedAt),
+          likeCount: post.likeCount,
+          hasUserLiked: post.hasUserLiked,
+        };
+      }));
+
+      this.logger.info(`FeedService: Successfully fetched and processed ${feedItems.length} posts.`, { correlationId });
+      return feedItems;
+
     } catch (error: any) {
-      logger.error('Error in FeedController getFeed', {
-        correlationId,
-        error: error.message,
-        stack: error.stack,
-        type: 'ControllerErrorLog.getFeed'
+      this.logger.error(`FeedService: Error calling PostService`, {
+        correlationId, error: error.message, stack: error.stack, url: `${POST_SERVICE_URL}/posts`,
       });
-      res.status(500).json({ message: 'Internal server error retrieving feed', correlationId });
+      throw new Error('Failed to retrieve feed from upstream service.');
     }
+  }
+
+  public async processUserLifecycleEvent(userEvent: UserLifecycleEvent, correlationId?: string): Promise<void> {
+    const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${userEvent.userId}`;
+    if ((userEvent.eventType === 'UserCreated' || userEvent.eventType === 'UserUpdated') && userEvent.username) {
+      this.userDetailsCache.set(userCacheKey, userEvent.username);
+    } else if (userEvent.eventType === 'UserDeleted') {
+      this.userDetailsCache.del(userCacheKey);
+    }
+  }
+  
+  public clearAllCaches(correlationId?: string): void {
+    this.userDetailsCache.flushAll();
+    this.logger.info('FeedService: User details cache cleared.', { correlationId });
   }
 }
