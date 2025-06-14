@@ -1,7 +1,7 @@
 import { Kafka, Consumer, EachMessagePayload } from 'kafkajs';
 import * as dotenv from 'dotenv';
 import { FeedService } from '../services/feed.service';
-import { PostCreatedEventData, UserLifecycleEvent } from '../models/events.model';
+import { PostCreatedEventData, PostLikedEventData, PostUnlikedEventData, UserLifecycleEvent } from '../models/feed.model';
 import winston from 'winston';
 import { v4 as uuidv4 } from 'uuid'; 
 
@@ -63,15 +63,24 @@ const handleMessage = async ({ topic, partition, message }: EachMessagePayload):
   currentLogger.info(`Processing Kafka message.`, { ...messageLogInfo, dataPreview: eventDataString.substring(0, 200) + '...' });
 
   try {
+    const genericEvent = JSON.parse(eventDataString);
+
     if (topic === postEventsTopic) {
-      const event: PostCreatedEventData = JSON.parse(eventDataString);
-      if (event.eventType === 'PostCreated' && event.postId) {
-        await feedServiceInstance.processNewPostEvent(event, correlationId);
-      } else {
-        currentLogger.warn(`Received non-PostCreated event or event missing postId.`, { ...messageLogInfo, eventType: event.eventType, topic: postEventsTopic, eventData: eventDataString, type: 'KafkaConsumerLog.MalformedEvent' });
+      switch (genericEvent.eventType) {
+        case 'PostCreated':
+          await feedServiceInstance.processNewPostEvent(genericEvent as PostCreatedEventData, correlationId);
+          break;
+        case 'PostLiked':
+          await feedServiceInstance.processPostLikedEvent(genericEvent as PostLikedEventData, correlationId);
+          break;
+        case 'PostUnliked':
+          await feedServiceInstance.processPostUnlikedEvent(genericEvent as PostUnlikedEventData, correlationId);
+          break;
+        default:
+          currentLogger.warn(`Received unknown eventType on post_events topic.`, { ...messageLogInfo, eventType: genericEvent.eventType, topic: postEventsTopic, type: 'KafkaConsumerLog.UnknownEventType' });
       }
     } else if (topic === userLifecycleTopic) {
-      const event: UserLifecycleEvent = JSON.parse(eventDataString);
+      const event: UserLifecycleEvent = genericEvent;
       if (event.userId && event.eventType) {
         await feedServiceInstance.processUserLifecycleEvent(event, correlationId);
       } else {
@@ -80,6 +89,7 @@ const handleMessage = async ({ topic, partition, message }: EachMessagePayload):
     } else {
       currentLogger.warn(`Received message from unhandled topic.`, { ...messageLogInfo, topic, type: 'KafkaConsumerLog.UnhandledTopic' });
     }
+    
     currentLogger.info(`Successfully processed Kafka message.`, { ...messageLogInfo, type: 'KafkaConsumerLog.MessageProcessed' });
   } catch (error: any) {
     currentLogger.error(`Error processing Kafka event.`, {
@@ -108,7 +118,6 @@ export const startFeedConsumers = async (): Promise<void> => {
     console.error(errMsg);
     throw new Error(errMsg);
   }
-
 
   consumer = kafka.consumer({ groupId: consumerGroupId });
 

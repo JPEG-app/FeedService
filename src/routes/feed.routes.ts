@@ -1,14 +1,23 @@
-import express, { Request as ExpressRequest, Response } from 'express';
+import express, { Request as ExpressRequest, Response, NextFunction } from 'express';
 import { FeedController } from '../controllers/feed.controller';
 import { FeedService } from '../services/feed.service';
 import logger, { RequestWithId } from '../utils/logger';
 
 const router = express.Router();
 
+const identifyUserMiddleware = (req: ExpressRequest, res: Response, next: NextFunction) => {
+    const typedReq = req as RequestWithId;
+    const userId = req.headers['x-user-id'] as string;
+    if (userId) {
+        typedReq.authUserId = userId;
+    }
+    next();
+};
+
 export const setupFeedRoutes = (feedServiceInstance: FeedService) => {
   const feedController = new FeedController(feedServiceInstance);
-
-  router.get('/feed', feedController.getFeed.bind(feedController));
+  
+  router.get('/feed', identifyUserMiddleware, feedController.getFeed.bind(feedController));
 
   router.post('/feed/admin/clear-cache', (req: ExpressRequest, res: Response) => {
     const typedReq = req as RequestWithId;
