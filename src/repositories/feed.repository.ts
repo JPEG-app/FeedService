@@ -38,9 +38,7 @@ export class FeedRepository {
 
     const startTime = Date.now();
     try {
-      const postsResponse = await this.axiosInstance.get(requestUrl, {
-          headers: { 'X-Correlation-ID': opCorrelationId }
-      });
+      const postsResponse = await this.axiosInstance.get(requestUrl);
       const latencyMs = Date.now() - startTime;
 
       this.logger.info(`FeedRepository: Successfully fetched posts from downstream service.`, {

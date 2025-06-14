@@ -4,6 +4,7 @@ import NodeCache from 'node-cache';
 import winston from 'winston';
 import axios from 'axios';
 
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service-service:3001';
 const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
