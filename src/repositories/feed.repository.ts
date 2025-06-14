@@ -63,6 +63,8 @@ export class FeedRepository {
         postContent: post.content,
         createdAt: new Date(post.created_at),
         updatedAt: new Date(post.updated_at),
+        likeCount: post.likeCount,
+        hasUserLiked: post.hasUserLiked
       }));
 
       feedItems.sort(
