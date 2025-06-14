@@ -4,8 +4,8 @@ import NodeCache from 'node-cache';
 import winston from 'winston';
 import axios from 'axios';
 
-// This is the internal Kubernetes address for the post-service
 const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-service:3002';
+const USER_SERVICE_URL = process.env.USER_SERVICE_URL || 'http://user-service-service:3001';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
 
 export class FeedService {
@@ -14,8 +14,20 @@ export class FeedService {
 
   constructor(loggerInstance: winston.Logger) {
     this.logger = loggerInstance;
-    // We ONLY cache user details, not the entire feed.
     this.userDetailsCache = new NodeCache({ stdTTL: 0, checkperiod: 0 });
+  }
+
+  private async fetchAndCacheUsername(userId: string, correlationId?: string): Promise<string> {
+    try {
+      this.logger.info(`Cache miss for userId ${userId}. Fetching from UserService.`, { correlationId });
+      const response = await axios.get(`${USER_SERVICE_URL}/users/${userId}`);
+      const username = response.data?.username || 'Unknown User';
+      this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${userId}`, username);
+      return username;
+    } catch (error) {
+      this.logger.error(`Failed to fetch details for userId ${userId} from UserService.`, { correlationId });
+      return 'Unknown User';
+    }
   }
 
   async getFeed(correlationId?: string, requestingAuthUserId?: string): Promise<FeedItem[]> {
@@ -26,15 +38,17 @@ export class FeedService {
       if (requestingAuthUserId) {
         headers['X-User-ID'] = requestingAuthUserId;
       }
-
-      // 1. Make a direct API call to the Post Service
+      
       const response = await axios.get(`${POST_SERVICE_URL}/posts`, { headers });
       const posts: any[] = response.data;
 
-      // 2. Augment the posts with author usernames from our local cache
-      const feedItems: FeedItem[] = posts.map(post => {
+      const feedItems = await Promise.all(posts.map(async (post) => {
         const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${post.userId}`;
-        const authorUsername = this.userDetailsCache.get<string>(userCacheKey) || 'Unknown User';
+        let authorUsername = this.userDetailsCache.get<string>(userCacheKey);
+
+        if (!authorUsername) {
+          authorUsername = await this.fetchAndCacheUsername(post.userId, correlationId);
+        }
 
         return {
           postId: post.postId,
@@ -47,17 +61,14 @@ export class FeedService {
           likeCount: post.likeCount,
           hasUserLiked: post.hasUserLiked,
         };
-      });
+      }));
 
       this.logger.info(`FeedService: Successfully fetched and processed ${feedItems.length} posts.`, { correlationId });
       return feedItems;
 
     } catch (error: any) {
       this.logger.error(`FeedService: Error calling PostService`, {
-        correlationId,
-        error: error.message,
-        stack: error.stack,
-        url: `${POST_SERVICE_URL}/posts`,
+        correlationId, error: error.message, stack: error.stack, url: `${POST_SERVICE_URL}/posts`,
       });
       throw new Error('Failed to retrieve feed from upstream service.');
     }
