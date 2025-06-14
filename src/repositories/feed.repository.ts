@@ -58,19 +58,19 @@ export class FeedRepository {
     }
   }
 
-  async getUsersByIds(userIds: string[], correlationId?: string): Promise<UserFromService[]> {
+  async getUsersByIds(userIds: string[], correlationId?: string, authorizationHeader?: string): Promise<UserFromService[]> {
     if (userIds.length === 0) {
       return [];
     }
-    const requestUrl = `${this.userServiceUrl}/users`;
-    this.logger.info(`FeedRepository: Fetching ${userIds.length} users in bulk from UserService.`, { correlationId, url: requestUrl });
+    const params = new URLSearchParams({ ids: userIds.join(',') });
+    const requestUrl = `${this.userServiceUrl}/users?${params.toString()}`;
+    
+    const headers: Record<string, string> = {};
+    if (correlationId) headers['X-Correlation-ID'] = correlationId;
+    if (authorizationHeader) headers['Authorization'] = authorizationHeader;
 
     try {
-      const response = await this.axiosInstance.post<UserFromService[]>(
-        requestUrl,
-        { userIds },
-        { headers: { 'X-Correlation-ID': correlationId } }
-      );
+      const response = await this.axiosInstance.get<UserFromService[]>(requestUrl, { headers });
       return response.data;
     } catch (error) {
       this.logger.error(`FeedRepository: Error fetching users in bulk.`, { correlationId, error: (error as any).message });

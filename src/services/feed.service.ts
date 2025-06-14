@@ -38,7 +38,7 @@ export class FeedService {
 
     if (idsToFetch.length > 0) {
         this.logger.info(`FeedService: Cache miss for ${idsToFetch.length} users. Fetching from repository.`, { correlationId });
-        const usersFromRepo = await this.feedRepository.getUsersByIds(idsToFetch, correlationId);
+        const usersFromRepo = await this.feedRepository.getUsersByIds(idsToFetch, correlationId, authorizationHeader);
         
         usersFromRepo.forEach(user => {
             usernames.set(user.userId, user.username);
