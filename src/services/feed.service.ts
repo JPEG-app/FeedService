@@ -28,7 +28,7 @@ export class FeedService {
 
       const response = await axios.get(`${POST_SERVICE_URL}/posts`, { headers });
       const posts: any[] = response.data;
-
+      console.log(posts)
       const feedItems: FeedItem[] = posts.map(post => {
         const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${post.userId}`;
         const authorUsername = this.userDetailsCache.get<string>(userCacheKey) || 'Unknown User';
