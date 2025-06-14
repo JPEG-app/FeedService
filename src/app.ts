@@ -3,7 +3,7 @@ import bodyParser from 'body-parser';
 import cors from 'cors';
 import { setupFeedRoutes } from './routes/feed.routes';
 import { FeedService } from './services/feed.service';
-import { initializeFeedServiceForConsumer, startFeedConsumers } from './kafka/consumer';
+import { initializeFeedServiceForConsumer } from './kafka/consumer';
 import logger, { assignRequestId, requestLogger, logError, RequestWithId } from './utils/logger';
 
 export class App {
@@ -14,12 +14,6 @@ export class App {
     this.app = express();
     this.feedService = new FeedService(logger);
     initializeFeedServiceForConsumer(this.feedService, logger);
-  }
-  
-  public async bootstrap(): Promise<void> {
-    await startFeedConsumers();
-    logger.info('Kafka historical replay complete. Initializing HTTP routes.');
-
     this.config();
     this.routes();
     this.errorHandling();

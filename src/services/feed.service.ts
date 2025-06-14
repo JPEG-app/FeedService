@@ -1,133 +1,79 @@
 import { FeedItem } from '../models/feed.model';
-import { PostCreatedEventData, PostLikedEventData, PostUnlikedEventData, UserLifecycleEvent } from '../models/feed.model';
+import { UserLifecycleEvent } from '../models/feed.model';
 import NodeCache from 'node-cache';
 import winston from 'winston';
+import axios from 'axios';
 
-const FEED_CACHE_KEY = 'aggregated-feed-items';
+// This is the internal Kubernetes address for the post-service
+const POST_SERVICE_URL = process.env.POST_SERVICE_URL || 'http://post-service-deployment.default.svc.cluster.local:3000';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
-const USER_LIKES_CACHE_PREFIX = 'user-likes-';
 
 export class FeedService {
-  private feedItemsCache: NodeCache;
   private userDetailsCache: NodeCache;
-  private userLikesCache: NodeCache;
   private logger: winston.Logger;
 
   constructor(loggerInstance: winston.Logger) {
     this.logger = loggerInstance;
-    this.feedItemsCache = new NodeCache({ stdTTL: 0, checkperiod: 0, useClones: false });
+    // We ONLY cache user details, not the entire feed.
     this.userDetailsCache = new NodeCache({ stdTTL: 0, checkperiod: 0 });
-    this.userLikesCache = new NodeCache({ stdTTL: 0, checkperiod: 0, useClones: false });
-
-    if (!this.feedItemsCache.has(FEED_CACHE_KEY)) {
-        this.feedItemsCache.set(FEED_CACHE_KEY, []);
-        this.logger.info('FeedService: Initialized empty feedItemsCache.', { cacheKey: FEED_CACHE_KEY, type: 'CacheLog.Init' });
-    }
   }
 
   async getFeed(correlationId?: string, requestingAuthUserId?: string): Promise<FeedItem[]> {
-    const cachedFeedItems = this.feedItemsCache.get<FeedItem[]>(FEED_CACHE_KEY) || [];
-    
-    this.logger.info(`FeedService: Cache hit for feed items.`, { correlationId, cacheKey: FEED_CACHE_KEY, count: cachedFeedItems.length, type: 'CacheLog.GetFeed' });
+    this.logger.info(`FeedService: Fetching posts directly from PostService`, { correlationId, authUserId: requestingAuthUserId });
 
-    let userLikedPostIds: Set<string> = new Set();
-    if (requestingAuthUserId) {
-      const userLikesCacheKey = `${USER_LIKES_CACHE_PREFIX}${requestingAuthUserId}`;
-      userLikedPostIds = this.userLikesCache.get<Set<string>>(userLikesCacheKey) || new Set();
-    }
+    try {
+      const headers: Record<string, string> = { 'X-Correlation-ID': correlationId || '' };
+      if (requestingAuthUserId) {
+        headers['X-User-ID'] = requestingAuthUserId;
+      }
 
-    const feedItemsWithLikeStatus = cachedFeedItems.map(item => ({
-      ...item,
-      hasUserLiked: userLikedPostIds.has(item.postId),
-    }));
-    
-    const feedItemsToReturn = feedItemsWithLikeStatus.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    this.logger.debug(`FeedService: Returning ${feedItemsToReturn.length} feed items.`, { correlationId, count: feedItemsToReturn.length, type: 'ServiceLog.GetFeed' });
-    return feedItemsToReturn;
-  }
+      // 1. Make a direct API call to the Post Service
+      const response = await axios.get(`${POST_SERVICE_URL}/posts`, { headers });
+      const posts: any[] = response.data;
 
-  public async processNewPostEvent(postEvent: PostCreatedEventData, correlationId?: string): Promise<void> {
-    this.logger.info(`FeedService: Processing PostCreatedEvent`, { correlationId, postId: postEvent.postId, userId: postEvent.userId, type: 'EventProcessingLog.PostCreated' });
-    
-    const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${postEvent.userId}`;
-    const username = this.userDetailsCache.get<string>(userCacheKey) || 'Unknown User';
-    
-    const newFeedItem: FeedItem = {
-      postId: postEvent.postId,
-      userId: postEvent.userId,
-      authorUsername: username,
-      postTitle: postEvent.title,
-      postContent: postEvent.content,
-      createdAt: new Date(postEvent.createdAt),
-      updatedAt: new Date(postEvent.updatedAt),
-      likeCount: postEvent.likeCount || 0,
-    };
+      // 2. Augment the posts with author usernames from our local cache
+      const feedItems: FeedItem[] = posts.map(post => {
+        const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${post.userId}`;
+        const authorUsername = this.userDetailsCache.get<string>(userCacheKey) || 'Unknown User';
 
-    let currentFeedItems = this.feedItemsCache.get<FeedItem[]>(FEED_CACHE_KEY) || [];
-    currentFeedItems = currentFeedItems.filter(item => item.postId !== newFeedItem.postId);
-    currentFeedItems.unshift(newFeedItem);
+        return {
+          postId: post.postId,
+          userId: post.userId,
+          authorUsername: authorUsername,
+          postTitle: post.title,
+          postContent: post.content,
+          createdAt: new Date(post.createdAt),
+          updatedAt: new Date(post.updatedAt),
+          likeCount: post.likeCount,
+          hasUserLiked: post.hasUserLiked,
+        };
+      });
 
-    this.feedItemsCache.set(FEED_CACHE_KEY, currentFeedItems);
-    this.logger.info(`FeedService: Added/Updated post in feed cache.`, { correlationId, postId: newFeedItem.postId, newSize: currentFeedItems.length, type: 'CacheLog.FeedUpdate' });
-  }
+      this.logger.info(`FeedService: Successfully fetched and processed ${feedItems.length} posts.`, { correlationId });
+      return feedItems;
 
-  public async processPostLikedEvent(likeEvent: PostLikedEventData, correlationId?: string): Promise<void> {
-    this.logger.info(`FeedService: Processing PostLikedEvent`, { correlationId, postId: likeEvent.postId, userId: likeEvent.userId, type: 'EventProcessingLog.PostLiked' });
-    const currentFeedItems = this.feedItemsCache.get<FeedItem[]>(FEED_CACHE_KEY) || [];
-    const postIndex = currentFeedItems.findIndex(item => item.postId === likeEvent.postId);
-
-    if (postIndex > -1) {
-      currentFeedItems[postIndex].likeCount++;
-      this.feedItemsCache.set(FEED_CACHE_KEY, currentFeedItems);
-      this.logger.info(`FeedService: Incremented like count for post in feed cache.`, { correlationId, postId: likeEvent.postId, newLikeCount: currentFeedItems[postIndex].likeCount });
-    }
-
-    const userLikesCacheKey = `${USER_LIKES_CACHE_PREFIX}${likeEvent.userId}`;
-    const userLikes = this.userLikesCache.get<Set<string>>(userLikesCacheKey) || new Set();
-    userLikes.add(likeEvent.postId);
-    this.userLikesCache.set(userLikesCacheKey, userLikes);
-    this.logger.info(`FeedService: Added post to user's like set.`, { correlationId, userId: likeEvent.userId, postId: likeEvent.postId });
-  }
-
-  public async processPostUnlikedEvent(unlikeEvent: PostUnlikedEventData, correlationId?: string): Promise<void> {
-    this.logger.info(`FeedService: Processing PostUnlikedEvent`, { correlationId, postId: unlikeEvent.postId, userId: unlikeEvent.userId, type: 'EventProcessingLog.PostUnliked' });
-    const currentFeedItems = this.feedItemsCache.get<FeedItem[]>(FEED_CACHE_KEY) || [];
-    const postIndex = currentFeedItems.findIndex(item => item.postId === unlikeEvent.postId);
-
-    if (postIndex > -1 && currentFeedItems[postIndex].likeCount > 0) {
-      currentFeedItems[postIndex].likeCount--;
-      this.feedItemsCache.set(FEED_CACHE_KEY, currentFeedItems);
-      this.logger.info(`FeedService: Decremented like count for post in feed cache.`, { correlationId, postId: unlikeEvent.postId, newLikeCount: currentFeedItems[postIndex].likeCount });
-    }
-
-    const userLikesCacheKey = `${USER_LIKES_CACHE_PREFIX}${unlikeEvent.userId}`;
-    const userLikes = this.userLikesCache.get<Set<string>>(userLikesCacheKey);
-    if (userLikes) {
-      userLikes.delete(unlikeEvent.postId);
-      this.userLikesCache.set(userLikesCacheKey, userLikes);
-      this.logger.info(`FeedService: Removed post from user's like set.`, { correlationId, userId: unlikeEvent.userId, postId: unlikeEvent.postId });
+    } catch (error: any) {
+      this.logger.error(`FeedService: Error calling PostService`, {
+        correlationId,
+        error: error.message,
+        stack: error.stack,
+        url: `${POST_SERVICE_URL}/posts`,
+      });
+      throw new Error('Failed to retrieve feed from upstream service.');
     }
   }
 
   public async processUserLifecycleEvent(userEvent: UserLifecycleEvent, correlationId?: string): Promise<void> {
-    this.logger.info(`FeedService: Processing UserLifecycleEvent`, { correlationId, eventType: userEvent.eventType, userId: userEvent.userId, type: `EventProcessingLog.${userEvent.eventType}` });
     const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${userEvent.userId}`;
-
     if ((userEvent.eventType === 'UserCreated' || userEvent.eventType === 'UserUpdated') && userEvent.username) {
       this.userDetailsCache.set(userCacheKey, userEvent.username);
-      this.logger.info(`FeedService: Cached username for user.`, { correlationId, userId: userEvent.userId, username: userEvent.username, type: 'CacheLog.UserDetailsUpdate' });
     } else if (userEvent.eventType === 'UserDeleted') {
       this.userDetailsCache.del(userCacheKey);
-      this.userLikesCache.del(`${USER_LIKES_CACHE_PREFIX}${userEvent.userId}`);
-      this.logger.info(`FeedService: Removed user details and likes from cache for deleted user.`, { correlationId, userId: userEvent.userId, type: 'CacheLog.UserDetailsDelete' });
     }
   }
-
+  
   public clearAllCaches(correlationId?: string): void {
-    this.feedItemsCache.flushAll();
     this.userDetailsCache.flushAll();
-    this.userLikesCache.flushAll();
-    this.feedItemsCache.set(FEED_CACHE_KEY, []);
-    this.logger.info('FeedService: All internal caches cleared.', { correlationId, type: 'CacheLog.FlushAll' });
+    this.logger.info('FeedService: User details cache cleared.', { correlationId });
   }
 }
