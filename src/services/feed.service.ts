@@ -45,35 +45,14 @@ export class FeedService {
 
       const posts = await this.feedRepo.getPosts(correlationId, authHeader);
 
-      const userId = await this.tokenService.verifyToken(authHeader as string);
-
-      const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${userId}`;
-      let username = this.userDetailsCache.get<string>(userCacheKey);
-
-      if (!username) {
-        const users = await this.feedRepo.getUsersByIds(correlationId, authHeader);
-        const user = users.find((u) => u.userId === userId?.userId);
-        username = user?.username || 'Unknown User';
-
-        if (username !== 'Unknown User') {
-          this.userDetailsCache.set(userCacheKey, username);
-          this.logger.info('FeedService: Username cached after lookup.', {
-            correlationId,
-            userId: userId,
-            username,
-          });
-        } else {
-          this.logger.warn('FeedService: Could not resolve username for userId.', {
-            correlationId,
-            userId: userId,
-          });
-        }
-      }
+      const users = await this.feedRepo.getUsersByIds(correlationId, authHeader);
+    
+      const userMap = new Map(users.map(user => [user.userId, user.username]));
 
       cachedFeedItems = posts.map((post) => ({
         postId: post.postId,
         userId: post.userId,
-        authorUsername: username || 'Unknown User',
+        authorUsername: userMap.get(post.userId) || 'Unknown User',
         postTitle: post.title,
         postContent: post.content,
         createdAt: new Date(post.createdAt),

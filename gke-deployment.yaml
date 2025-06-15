@@ -28,7 +28,7 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 3003
-        resources: # FOR AUTOPILOT
+        resources:
           requests:
             cpu: "100m"
             memory: "128Mi"
@@ -38,6 +38,12 @@ spec:
         envFrom:
         - configMapRef:
             name: feed-service-config
+        env: 
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: feed-service-secret 
+              key: JWT_SECRET 
 ---
 apiVersion: v1
 kind: Service
