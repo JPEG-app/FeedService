@@ -2,8 +2,8 @@ export interface FeedItem {
   postId: string;
   userId: string;
   authorUsername: string;
-  postTitle: string;
-  postContent: string;
+  title: string;
+  content: string;
   createdAt: Date;
   updatedAt: Date;
   likeCount: number;
