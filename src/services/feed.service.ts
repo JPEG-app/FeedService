@@ -3,12 +3,9 @@ import { PostCreatedEventData, UserLifecycleEvent } from '../models/events.model
 import NodeCache from 'node-cache';
 import winston from 'winston';
 import { FeedRepository } from '../repositories/feed.repository';
-import { TokenService } from './token.service'
-// import logger from '../utils/logger';
 
 const FEED_CACHE_KEY = 'aggregated-feed-items';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
-const jwtSecret = process.env.JWT_SECRET;
 
 export class FeedService {
   private feedItemsCache: NodeCache;
@@ -76,10 +73,7 @@ export class FeedService {
       });
     }
 
-    let tokenService = new TokenService(jwtSecret as string, this.logger);
-    let currentUserId = await tokenService.verifyToken(authHeader as string);
-    let feedForUser = cachedFeedItems.filter(item => item.userId !== currentUserId?.userId);
-    return feedForUser.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return cachedFeedItems.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   async processNewPostEvent(postEvent: PostCreatedEventData, correlationId?: string, authHeader?: string): Promise<void> {
