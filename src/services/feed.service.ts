@@ -3,15 +3,20 @@ import { PostCreatedEventData, UserLifecycleEvent } from '../models/events.model
 import NodeCache from 'node-cache';
 import winston from 'winston';
 import { FeedRepository } from '../repositories/feed.repository';
+import { TokenService } from '../services/token.service';
+import logger from '../utils/logger';
 
 const FEED_CACHE_KEY = 'aggregated-feed-items';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
+const jwtSecret = process.env.JWT_SECRET;
 
 export class FeedService {
   private feedItemsCache: NodeCache;
   private userDetailsCache: NodeCache;
   private logger: winston.Logger;
   private feedRepo: FeedRepository;
+
+  private tokenService = new TokenService(jwtSecret as string, logger);
 
   constructor(loggerInstance: winston.Logger, feedRepo: FeedRepository) {
     this.logger = loggerInstance;
@@ -39,34 +44,36 @@ export class FeedService {
       });
 
       const posts = await this.feedRepo.getPosts(correlationId, authHeader);
-      const uniqueUserIds = Array.from(new Set(posts.map((post) => post.userId)));
 
-      const knownUsernames: Record<string, string> = {};
-      const missingUserIds: string[] = [];
+      const userId = await this.tokenService.verifyToken(authHeader as string);
 
-      for (const userId of uniqueUserIds) {
-        const cached = this.userDetailsCache.get<string>(`${USER_DETAIL_CACHE_PREFIX}${userId}`);
-        if (cached) {
-          knownUsernames[userId] = cached;
+      const userCacheKey = `${USER_DETAIL_CACHE_PREFIX}${userId}`;
+      let username = this.userDetailsCache.get<string>(userCacheKey);
+
+      if (!username) {
+        const users = await this.feedRepo.getUsersByIds(correlationId, authHeader);
+        const user = users.find((u) => u.userId === userId?.userId);
+        username = user?.username || 'Unknown User';
+
+        if (username !== 'Unknown User') {
+          this.userDetailsCache.set(userCacheKey, username);
+          this.logger.info('FeedService: Username cached after lookup.', {
+            correlationId,
+            userId: userId,
+            username,
+          });
         } else {
-          missingUserIds.push(userId);
-        }
-      }
-
-      if (missingUserIds.length > 0) {
-        const allUsers = await this.feedRepo.getUsersByIds(correlationId, authHeader);
-        for (const user of allUsers) {
-          if (missingUserIds.includes(user.userId)) {
-            this.userDetailsCache.set(`${USER_DETAIL_CACHE_PREFIX}${user.userId}`, user.username);
-            knownUsernames[user.userId] = user.username;
-          }
+          this.logger.warn('FeedService: Could not resolve username for userId.', {
+            correlationId,
+            userId: userId,
+          });
         }
       }
 
       cachedFeedItems = posts.map((post) => ({
         postId: post.postId,
         userId: post.userId,
-        authorUsername: knownUsernames[post.userId] || 'Unknown User',
+        authorUsername: username || 'Unknown User',
         postTitle: post.title,
         postContent: post.content,
         createdAt: new Date(post.createdAt),
@@ -135,7 +142,7 @@ export class FeedService {
       createdAt: new Date(postEvent.createdAt),
       updatedAt: new Date(postEvent.updatedAt),
       likeCount: 0,
-      hasUserLiked: false, // Default value — not known from event
+      hasUserLiked: false, 
     };
 
     const currentFeedItems = this.feedItemsCache.get<FeedItem[]>(FEED_CACHE_KEY) || [];
