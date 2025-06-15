@@ -1,17 +1,7 @@
-import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import axios, { InternalAxiosRequestConfig } from 'axios';
+import { FeedItem, User } from '../models/feed.model';
 import winston from 'winston';
 import { v4 as uuidv4 } from 'uuid';
-
-export interface PostFromService {
-  postId: string;
-  userId: string;
-  title: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-  likeCount: number;
-  hasUserLiked: boolean;
-}
 
 export interface UserFromService {
   userId: string;
@@ -41,7 +31,7 @@ export class FeedRepository {
     });
   }
 
-  async getPosts(correlationId?: string, authorizationHeader?: string): Promise<PostFromService[]> {
+  async getPosts(correlationId?: string, authorizationHeader?: string): Promise<FeedItem[]> {
     const requestUrl = `${this.postServiceUrl}/posts`;
     this.logger.info(`FeedRepository: Fetching posts from PostService.`, { correlationId, url: requestUrl });
     
@@ -50,7 +40,7 @@ export class FeedRepository {
     if (authorizationHeader) headers['Authorization'] = authorizationHeader;
 
     try {
-      const response = await this.axiosInstance.get<PostFromService[]>(requestUrl, { headers });
+      const response = await this.axiosInstance.get<FeedItem[]>(requestUrl, { headers });
       return response.data;
     } catch (error) {
       this.logger.error(`FeedRepository: Error fetching posts.`, { correlationId, error: (error as any).message });
@@ -58,7 +48,7 @@ export class FeedRepository {
     }
   }
 
-  async getUsersByIds(correlationId?: string, authorizationHeader?: string): Promise<UserFromService[]> {
+  async getUsersByIds(correlationId?: string, authorizationHeader?: string): Promise<User[]> {
     const requestUrl = `${this.userServiceUrl}/users`;
     
     const headers: Record<string, string> = {};
@@ -66,7 +56,7 @@ export class FeedRepository {
     if (authorizationHeader) headers['Authorization'] = authorizationHeader;
 
     try {
-      const response = await this.axiosInstance.get<UserFromService[]>(requestUrl, { headers });
+      const response = await this.axiosInstance.get<User[]>(requestUrl, { headers });
       return response.data;
     } catch (error) {
       this.logger.error(`FeedRepository: Error fetching users in bulk.`, { correlationId, error: (error as any).message });

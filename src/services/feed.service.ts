@@ -3,20 +3,15 @@ import { PostCreatedEventData, UserLifecycleEvent } from '../models/events.model
 import NodeCache from 'node-cache';
 import winston from 'winston';
 import { FeedRepository } from '../repositories/feed.repository';
-import { TokenService } from '../services/token.service';
-import logger from '../utils/logger';
 
 const FEED_CACHE_KEY = 'aggregated-feed-items';
 const USER_DETAIL_CACHE_PREFIX = 'user-detail-';
-const jwtSecret = process.env.JWT_SECRET;
 
 export class FeedService {
   private feedItemsCache: NodeCache;
   private userDetailsCache: NodeCache;
   private logger: winston.Logger;
   private feedRepo: FeedRepository;
-
-  private tokenService = new TokenService(jwtSecret as string, logger);
 
   constructor(loggerInstance: winston.Logger, feedRepo: FeedRepository) {
     this.logger = loggerInstance;
@@ -47,14 +42,14 @@ export class FeedService {
 
       const users = await this.feedRepo.getUsersByIds(correlationId, authHeader);
     
-      const userMap = new Map(users.map(user => [user.userId, user.username]));
+      const userMap = new Map(users.map(user => [user.id, user.username]));
 
       cachedFeedItems = posts.map((post) => ({
         postId: post.postId,
         userId: post.userId,
         authorUsername: userMap.get(post.userId) || 'Unknown User',
-        postTitle: post.title,
-        postContent: post.content,
+        postTitle: post.postTitle,
+        postContent: post.postContent,
         createdAt: new Date(post.createdAt),
         updatedAt: new Date(post.updatedAt),
         likeCount: post.likeCount || 0,
@@ -94,7 +89,7 @@ export class FeedService {
 
     if (!username) {
       const users = await this.feedRepo.getUsersByIds(correlationId, authHeader);
-      const user = users.find((u) => u.userId === postEvent.userId);
+      const user = users.find((u) => u.id === postEvent.userId);
       username = user?.username || 'Unknown User';
 
       if (username !== 'Unknown User') {
